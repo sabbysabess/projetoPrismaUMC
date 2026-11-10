@@ -8,3 +8,7 @@ abstract interface class UserRepository {
   Future<int> atualizacaoUsuario(User user);
   Future<int> deletarUser(String id);
 }
+
+class DuplicateUserException implements Exception {
+  const DuplicateUserException();
+}

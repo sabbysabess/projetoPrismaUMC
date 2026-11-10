@@ -4,23 +4,20 @@ import 'dart:io';
 import 'package:projeto_base_prisma/domain/Aluno.dart';
 import 'package:projeto_base_prisma/domain/Professor.dart';
 import 'package:projeto_base_prisma/domain/User.dart';
-import 'package:projeto_base_prisma/infraestructure/repository/gerenciadoBancoDeDados.dart';
 import 'package:projeto_base_prisma/infraestructure/repository/user_repository.dart';
 import 'package:projeto_base_prisma/infraestructure/security/password_hasher.dart';
 import 'package:projeto_base_prisma/infraestructure/security/session_store.dart';
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:shelf_router/shelf_router.dart';
-import 'package:sqflite/sqflite.dart';
 
 class LoginApi {
   LoginApi({
-    UserRepository? repository,
+    required this.repository,
     this.passwordHasher = const PasswordHasher(),
     SessionStore? sessions,
     this.onUserDeleted,
-  }) : repository = repository ?? GerenciadorBancoDeDados(),
-       sessions = sessions ?? SessionStore() {
+  }) : sessions = sessions ?? SessionStore() {
     router.get('/api/test', _getTest);
     router.get('/api/users/info', _getUser);
     router.get('/api/users/id', _getId);
@@ -45,7 +42,7 @@ class LoginApi {
             if (error is _RequestException) {
               return _json(error.statusCode, {'message': error.message});
             }
-            if (error is DatabaseException && error.isUniqueConstraintError()) {
+            if (error is DuplicateUserException) {
               return _json(409, {'message': 'Email ou CPF já cadastrado'});
             }
             stderr.writeln('Erro na API de usuários: $error\n$stackTrace');
@@ -113,13 +110,11 @@ class LoginApi {
         'serie': serie,
       });
     } else {
+      final cndb = _requiredString(data, 'cndb');
       final materia = _requiredString(data, 'materia');
       final licenciatura = _requiredString(data, 'licenciatura');
-      if (materia == null || licenciatura == null) {
-        throw const _RequestException(
-          400,
-          'materia e licenciatura são obrigatórias para professor',
-        );
+      if (cndb == null && (materia == null || licenciatura == null)) {
+        throw const _RequestException(400, 'cndb é obrigatório para professor');
       }
       user = Professor.fromJson(null, {
         ...data,
@@ -128,8 +123,9 @@ class LoginApi {
         'email': email.toLowerCase(),
         'cpf': cpf,
         'escola': school,
-        'materia': materia,
-        'licenciatura': licenciatura,
+        'cndb': cndb ?? '',
+        'materia': materia ?? '',
+        'licenciatura': licenciatura ?? '',
       });
     }
 
@@ -185,6 +181,7 @@ class LoginApi {
       'access_token': token,
       'token_type': 'Bearer',
       'expires_in': sessions.lifetime.inSeconds,
+      'profile': _profileResponse(user),
     });
   }
 
@@ -265,10 +262,11 @@ class LoginApi {
         'serie': serie,
       });
     } else if (type == 'professor') {
+      final cndb = _requiredString(data, 'cndb');
       final materia = _requiredString(data, 'materia');
       final licenciatura = _requiredString(data, 'licenciatura');
-      if (materia == null || licenciatura == null) {
-        throw const _RequestException(400, 'Dados do professor inválidos');
+      if (cndb == null && (materia == null || licenciatura == null)) {
+        throw const _RequestException(400, 'CNDB do professor inválido');
       }
       user = Professor.fromJson(id, {
         ...data,
@@ -277,8 +275,9 @@ class LoginApi {
         'email': email.toLowerCase(),
         'cpf': cpf,
         'escola': school,
-        'materia': materia,
-        'licenciatura': licenciatura,
+        'cndb': cndb ?? '',
+        'materia': materia ?? '',
+        'licenciatura': licenciatura ?? '',
       });
     } else {
       throw const _RequestException(400, 'tipo_usuario inválido');
@@ -345,6 +344,22 @@ class LoginApi {
     'tipo_usuario': user.tipoUsuario,
     if (user is Aluno) 'serie': user.serie,
     if (user is Professor) ...{
+      'cndb': user.cndb,
+      'materia': user.materia,
+      'licenciatura': user.licenciatura,
+    },
+  };
+
+  Map<String, Object?> _profileResponse(User user) => {
+    'id': user.id,
+    'nome': user.nome,
+    'email': user.email,
+    'cpf': user.cpf,
+    'escola': user.escola,
+    'tipo_usuario': user.tipoUsuario,
+    if (user is Aluno) 'serie': user.serie,
+    if (user is Professor) ...{
+      'cndb': user.cndb,
       'materia': user.materia,
       'licenciatura': user.licenciatura,
     },

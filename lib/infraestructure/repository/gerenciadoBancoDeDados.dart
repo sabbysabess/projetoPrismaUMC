@@ -3,28 +3,36 @@ import 'package:projeto_base_prisma/domain/Professor.dart';
 import 'package:projeto_base_prisma/domain/User.dart';
 import 'package:projeto_base_prisma/infraestructure/repository/database_helper_users.dart';
 import 'package:projeto_base_prisma/infraestructure/repository/user_repository.dart';
+import 'package:sqflite/sqflite.dart';
 
 class GerenciadorBancoDeDados implements UserRepository {
   @override
   Future<int> insertUser(User user, {required String passwordHash}) async {
     final db = await DatabaseHelperUsers.instance.database;
-    return db.transaction((txn) async {
-      final existing = await txn.query(
-        'Usuarios',
-        columns: ['usuario_id'],
-        where: 'email = ? OR cpf = ?',
-        whereArgs: [user.email, user.cpf],
-        limit: 1,
-      );
-      if (existing.isNotEmpty) return 0;
+    try {
+      return await db.transaction((txn) async {
+        final existing = await txn.query(
+          'Usuarios',
+          columns: ['usuario_id'],
+          where: 'email = ? OR cpf = ?',
+          whereArgs: [user.email, user.cpf],
+          limit: 1,
+        );
+        if (existing.isNotEmpty) return 0;
 
-      for (final entry in user.toMap().entries) {
-        final values = Map<String, Object?>.from(entry.value);
-        if (entry.key == 'Usuarios') values['senha'] = passwordHash;
-        await txn.insert(entry.key, values);
+        for (final entry in user.toMap().entries) {
+          final values = Map<String, Object?>.from(entry.value);
+          if (entry.key == 'Usuarios') values['senha'] = passwordHash;
+          await txn.insert(entry.key, values);
+        }
+        return 1;
+      });
+    } on DatabaseException catch (error) {
+      if (error.isUniqueConstraintError()) {
+        throw const DuplicateUserException();
       }
-      return 1;
-    });
+      rethrow;
+    }
   }
 
   @override
@@ -54,44 +62,55 @@ class GerenciadorBancoDeDados implements UserRepository {
   @override
   Future<int> atualizacaoUsuario(User user) async {
     final db = await DatabaseHelperUsers.instance.database;
-    return db.transaction((txn) async {
-      final existing = await txn.query(
-        'Usuarios',
-        columns: ['usuario_id'],
-        where: 'usuario_id = ?',
-        whereArgs: [user.id],
-        limit: 1,
-      );
-      if (existing.isEmpty) return 0;
-
-      final userMap = user.toMap();
-      for (final table in userMap.keys.where((table) => table != 'Usuarios')) {
-        final profile = await txn.query(
-          table,
-          columns: ['id'],
-          where: 'id = ?',
+    try {
+      return await db.transaction((txn) async {
+        final existing = await txn.query(
+          'Usuarios',
+          columns: ['usuario_id'],
+          where: 'usuario_id = ?',
           whereArgs: [user.id],
           limit: 1,
         );
-        if (profile.isEmpty) return 0;
-      }
+        if (existing.isEmpty) return 0;
 
-      for (final entry in userMap.entries) {
-        final values = Map<String, Object?>.from(entry.value);
-        final idColumn = entry.key == 'Usuarios' ? 'usuario_id' : 'id';
-        values.remove(idColumn);
-        final updated = await txn.update(
-          entry.key,
-          values,
-          where: '$idColumn = ?',
-          whereArgs: [user.id],
-        );
-        if (updated != 1) {
-          throw StateError('Não foi possível atualizar a tabela ${entry.key}.');
+        final userMap = user.toMap();
+        for (final table in userMap.keys.where(
+          (table) => table != 'Usuarios',
+        )) {
+          final profile = await txn.query(
+            table,
+            columns: ['id'],
+            where: 'id = ?',
+            whereArgs: [user.id],
+            limit: 1,
+          );
+          if (profile.isEmpty) return 0;
         }
+
+        for (final entry in userMap.entries) {
+          final values = Map<String, Object?>.from(entry.value);
+          final idColumn = entry.key == 'Usuarios' ? 'usuario_id' : 'id';
+          values.remove(idColumn);
+          final updated = await txn.update(
+            entry.key,
+            values,
+            where: '$idColumn = ?',
+            whereArgs: [user.id],
+          );
+          if (updated != 1) {
+            throw StateError(
+              'Não foi possível atualizar a tabela ${entry.key}.',
+            );
+          }
+        }
+        return 1;
+      });
+    } on DatabaseException catch (error) {
+      if (error.isUniqueConstraintError()) {
+        throw const DuplicateUserException();
       }
-      return 1;
-    });
+      rethrow;
+    }
   }
 
   @override
@@ -115,6 +134,7 @@ class GerenciadorBancoDeDados implements UserRepository {
         u.escola,
         u.tipo_usuario,
         p.materia,
+        p.licenciatura,
         p.cndb,
         a.serie
       FROM Usuarios u
